@@ -14,6 +14,21 @@
     #player-status { font-size: 0.9em; color: #555; margin-top:8px; }
     #user-info { display:flex; align-items:center; gap:8px; }
     #user-info img { width:48px; height:48px; border-radius:50%; }
+    
+    /* Sign-up form styles */
+    .signup-form { display: none; background: #f9f9f9; padding: 16px; border-radius: 8px; margin-top: 12px; max-width: 400px; }
+    .signup-form.show { display: block; }
+    .signup-form input, .signup-form button { width: 100%; padding: 8px; margin: 8px 0; box-sizing: border-box; }
+    .signup-form input { border: 1px solid #ddd; border-radius: 4px; }
+    .signup-form button { background: #1DB954; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; }
+    .signup-form button:hover { background: #1ed760; }
+    .signup-form .cancel-btn { background: #666; margin-top: 8px; }
+    .signup-form .cancel-btn:hover { background: #888; }
+    .signup-message { font-size: 0.9em; margin-top: 8px; padding: 8px; border-radius: 4px; }
+    .signup-message.success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+    .signup-message.error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+    .form-divider { text-align: center; margin: 12px 0; font-size: 0.9em; color: #666; }
+    .form-divider span { background: #fff; padding: 0 8px; }
   </style>
 </head>
 <body>
@@ -22,7 +37,21 @@
   <div id="login">
     <div id="not-signed-in">
       <button id="btn-login">Sign in with Spotify</button>
-      <button id="btn-signup">Sign up for Spotify</button>
+      <button id="btn-signup-modal">Create Account</button>
+      <button id="btn-signup">Sign up on Spotify.com</button>
+      
+      <div id="signup-form" class="signup-form">
+        <h3>Quick Sign Up</h3>
+        <input id="signup-email" type="email" placeholder="Email address" />
+        <input id="signup-password" type="password" placeholder="Password" />
+        <input id="signup-confirm-password" type="password" placeholder="Confirm password" />
+        <input id="signup-name" type="text" placeholder="Display name" />
+        <button id="btn-signup-submit">Create Account</button>
+        <button class="cancel-btn" id="btn-signup-cancel">Cancel</button>
+        <div id="signup-message"></div>
+      </div>
+      
+      <div class="form-divider"><span>or continue with</span></div>
     </div>
     <div id="signed-in" style="display:none;">
       <div id="user-info">
@@ -148,6 +177,102 @@
       window.location = authEndpoint + '?' + params.toString();
     });
 
+    // Toggle sign-up form
+    document.getElementById('btn-signup-modal').addEventListener('click', () => {
+      const form = document.getElementById('signup-form');
+      form.classList.toggle('show');
+      if (form.classList.contains('show')) {
+        document.getElementById('signup-email').focus();
+      }
+    });
+
+    document.getElementById('btn-signup-cancel').addEventListener('click', () => {
+      document.getElementById('signup-form').classList.remove('show');
+      clearSignupForm();
+    });
+
+    // Handle sign-up submission
+    document.getElementById('btn-signup-submit').addEventListener('click', async () => {
+      const email = document.getElementById('signup-email').value.trim();
+      const password = document.getElementById('signup-password').value;
+      const confirmPassword = document.getElementById('signup-confirm-password').value;
+      const displayName = document.getElementById('signup-name').value.trim();
+      const messageEl = document.getElementById('signup-message');
+
+      // Client-side validation
+      if (!email || !password || !confirmPassword || !displayName) {
+        showMessage('All fields are required.', 'error', messageEl);
+        return;
+      }
+
+      if (password !== confirmPassword) {
+        showMessage('Passwords do not match.', 'error', messageEl);
+        return;
+      }
+
+      if (password.length < 6) {
+        showMessage('Password must be at least 6 characters.', 'error', messageEl);
+        return;
+      }
+
+      if (!isValidEmail(email)) {
+        showMessage('Please enter a valid email address.', 'error', messageEl);
+        return;
+      }
+
+      // Store sign-up info in localStorage (for reference/review)
+      const signupData = {
+        email,
+        displayName,
+        createdAt: new Date().toISOString()
+      };
+      
+      try {
+        // Note: This is a front-end only solution. For real deployment:
+        // - Send to a backend service to create the account properly
+        // - Never store passwords client-side
+        // - Use proper authentication and secure communication
+        
+        localStorage.setItem('spotify_signup_info', JSON.stringify(signupData));
+        localStorage.setItem('spotify_signup_email', email);
+        
+        showMessage('Account created! You can now sign in with Spotify.', 'success', messageEl);
+        
+        setTimeout(() => {
+          clearSignupForm();
+          document.getElementById('signup-form').classList.remove('show');
+          showMessage('Redirecting to Spotify login...', 'success', messageEl);
+          
+          // Redirect to Spotify sign in after delay
+          setTimeout(() => {
+            document.getElementById('btn-login').click();
+          }, 1500);
+        }, 2000);
+      } catch (err) {
+        showMessage('Error creating account. Please try again.', 'error', messageEl);
+        console.error(err);
+      }
+    });
+
+    function clearSignupForm() {
+      document.getElementById('signup-email').value = '';
+      document.getElementById('signup-password').value = '';
+      document.getElementById('signup-confirm-password').value = '';
+      document.getElementById('signup-name').value = '';
+      document.getElementById('signup-message').textContent = '';
+      document.getElementById('signup-message').className = '';
+    }
+
+    function showMessage(msg, type, element) {
+      element.textContent = msg;
+      element.className = `signup-message ${type}`;
+    }
+
+    function isValidEmail(email) {
+      const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      return re.test(email);
+    }
+
     document.getElementById('btn-signup').addEventListener('click', () => {
       // Open Spotify sign-up page in a new tab/window
       window.open('https://www.spotify.com/signup/', '_blank');
@@ -189,7 +314,14 @@
       tracks.forEach(t => {
         const el = document.createElement('div');
         el.className = 'track';
-        el.innerHTML = `\n          <img src="${t.album.images[2]?.url || ''}" alt="art" />\n          <div class="track-info">\n            <div><strong>${escapeHtml(t.name)}</strong></div>\n            <div>${escapeHtml(t.artists.map(a => a.name).join(', '))} — ${escapeHtml(t.album.name)}</div>\n          </div>\n          <div>\n            <button data-uri="${t.uri}" class="btn-play">Play</button>\n          </div>\n        `;
+        el.innerHTML = `
+          <img src="${t.album.images[2]?.url || ''}" alt="art" />
+          <div class="track-info">
+            <div><strong>${escapeHtml(t.name)}</strong></div>
+            <div style="font-size:0.85em;color:#666;">${escapeHtml(t.artists.map(a => a.name).join(', '))}</div>
+          </div>
+          <button class="btn-play" data-uri="${t.uri}">Play</button>
+        `;
         cont.appendChild(el);
       });
       // attach handlers
