@@ -1,0 +1,526 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Spotify Search & Play</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 16px; }
+    #login, #controls, #search-results { margin-top: 16px; }
+    .track { padding: 8px; border-bottom: 1px solid #eee; display:flex; gap:8px; align-items:center; }
+    .track img { width:64px; height:64px; object-fit:cover; }
+    .track-info { flex:1; }
+    button { cursor:pointer; }
+    #player-status { font-size: 0.9em; color: #555; margin-top:8px; }
+    #user-info { display:flex; align-items:center; gap:8px; }
+    #user-info img { width:48px; height:48px; border-radius:50%; }
+    
+    /* Sign-up/Login form styles */
+    .auth-form { display: none; background: #f9f9f9; padding: 16px; border-radius: 8px; margin-top: 12px; max-width: 400px; }
+    .auth-form.show { display: block; }
+    .auth-form input, .auth-form button { width: 100%; padding: 8px; margin: 8px 0; box-sizing: border-box; }
+    .auth-form input { border: 1px solid #ddd; border-radius: 4px; }
+    .auth-form button { background: #1DB954; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; }
+    .auth-form button:hover { background: #1ed760; }
+    .auth-form .cancel-btn { background: #666; margin-top: 8px; }
+    .auth-form .cancel-btn:hover { background: #888; }
+    .auth-message { font-size: 0.9em; margin-top: 8px; padding: 8px; border-radius: 4px; }
+    .auth-message.success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+    .auth-message.error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+    .form-divider { text-align: center; margin: 12px 0; font-size: 0.9em; color: #666; }
+    .form-divider span { background: #fff; padding: 0 8px; }
+    .toggle-auth { font-size: 0.9em; margin-top: 12px; text-align: center; }
+    .toggle-auth button { width: auto; background: none; border: none; color: #1DB954; cursor: pointer; text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <h1>Spotify Search & Play</h1>
+
+  <div id="login">
+    <div id="not-signed-in">
+      <button id="btn-login-spotify">Sign in with Spotify</button>
+      <button id="btn-login-modal">Sign in with Email</button>
+      <button id="btn-signup-modal">Create Account</button>
+      
+      <!-- Sign Up Form -->
+      <div id="signup-form" class="auth-form">
+        <h3>Create Account</h3>
+        <input id="signup-email" type="email" placeholder="Email address" />
+        <input id="signup-password" type="password" placeholder="Password (min 6 chars)" />
+        <input id="signup-confirm-password" type="password" placeholder="Confirm password" />
+        <input id="signup-name" type="text" placeholder="Display name" />
+        <button id="btn-signup-submit">Create Account</button>
+        <button class="cancel-btn" id="btn-signup-cancel">Cancel</button>
+        <div id="signup-message" class="auth-message"></div>
+        <div class="toggle-auth">
+          Already have an account? <button id="toggle-to-login">Sign in</button>
+        </div>
+      </div>
+
+      <!-- Login Form -->
+      <div id="login-form" class="auth-form">
+        <h3>Sign In</h3>
+        <input id="login-email" type="email" placeholder="Email address" />
+        <input id="login-password" type="password" placeholder="Password" />
+        <button id="btn-login-submit">Sign In</button>
+        <button class="cancel-btn" id="btn-login-cancel">Cancel</button>
+        <div id="login-message" class="auth-message"></div>
+        <div class="toggle-auth">
+          Don't have an account? <button id="toggle-to-signup">Create one</button>
+        </div>
+      </div>
+      
+      <div class="form-divider"><span>or</span></div>
+    </div>
+
+    <div id="signed-in" style="display:none;">
+      <div id="user-info">
+        <img id="user-avatar" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='50' fill='%231DB954'/%3E%3Ctext x='50' y='50' text-anchor='middle' dy='.3em' fill='white' font-size='50' font-weight='bold'%3EU%3C/text%3E%3C/svg%3E" alt="avatar" style="width:48px;height:48px;border-radius:50%;" />
+        <div>
+          <div id="user-name"></div>
+          <div style="font-size:0.9em;color:#666;" id="user-email"></div>
+        </div>
+      </div>
+      <div style="margin-top:8px;">
+        <button id="btn-logout">Sign out</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="controls" style="display:none;">
+    <input id="query" placeholder="Search for track or artist" style="width:60%;" />
+    <button id="btn-search">Search</button>
+    <div id="player-status">Player not ready</div>
+  </div>
+
+  <div id="search-results"></div>
+
+  <!-- Spotify Web Playback SDK will be loaded dynamically -->
+  <script>
+    // CONFIGURE THESE:
+    const CLIENT_ID = 'REPLACE_WITH_YOUR_SPOTIFY_CLIENT_ID';
+    const REDIRECT_URI = 'http://localhost:5000/'; // Must match Redirect URI in Spotify Dev Dashboard
+    const API_BASE = 'http://localhost:5000'; // Change for production
+    
+    // SCOPES:
+    const SCOPES = [
+      'streaming',
+      'user-read-email',
+      'user-read-private',
+      'user-read-playback-state',
+      'user-modify-playback-state'
+    ].join(' ');
+
+    // ============= LOCAL AUTH (Backend Integration) =============
+    
+    // Store backend JWT token
+    function getBackendToken() {
+      return localStorage.getItem('backend_token');
+    }
+
+    function saveBackendToken(token) {
+      localStorage.setItem('backend_token', token);
+    }
+
+    function clearBackendToken() {
+      localStorage.removeItem('backend_token');
+    }
+
+    async function signupWithBackend(email, password, displayName) {
+      try {
+        const res = await fetch(`${API_BASE}/auth/signup`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email,
+            password,
+            display_name: displayName
+          })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Signup failed');
+        
+        saveBackendToken(data.token);
+        return { success: true, user: data.user };
+      } catch (err) {
+        return { success: false, error: err.message };
+      }
+    }
+
+    async function loginWithBackend(email, password) {
+      try {
+        const res = await fetch(`${API_BASE}/auth/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Login failed');
+        
+        saveBackendToken(data.token);
+        return { success: true, user: data.user };
+      } catch (err) {
+        return { success: false, error: err.message };
+      }
+    }
+
+    async function logoutBackend() {
+      clearBackendToken();
+    }
+
+    // ============= SPOTIFY AUTH (Implicit Grant) =============
+
+    // Helper: parse token from URL hash
+    function parseHash() {
+      const hash = window.location.hash.substring(1);
+      const result = {};
+      hash.split('&').forEach(part => {
+        const [k, v] = part.split('=');
+        if (k) result[k] = decodeURIComponent(v);
+      });
+      return result;
+    }
+
+    function saveSpotifyTokenFromHash() {
+      const data = parseHash();
+      if (data.access_token) {
+        const expiresAt = Date.now() + (parseInt(data.expires_in || '3600', 10) * 1000);
+        localStorage.setItem('spotify_token', data.access_token);
+        localStorage.setItem('spotify_token_expires', expiresAt);
+        history.replaceState(null, '', location.pathname + location.search);
+      }
+    }
+
+    function getSpotifyToken() {
+      const token = localStorage.getItem('spotify_token');
+      const expires = parseInt(localStorage.getItem('spotify_token_expires') || '0', 10);
+      if (token && Date.now() < expires) return token;
+      return null;
+    }
+
+    function clearSpotifyToken() {
+      localStorage.removeItem('spotify_token');
+      localStorage.removeItem('spotify_token_expires');
+    }
+
+    async function fetchMe(token) {
+      const res = await fetch('https://api.spotify.com/v1/me', { headers: { Authorization: 'Bearer ' + token } });
+      if (!res.ok) throw new Error('Failed to fetch user profile: ' + res.status);
+      return await res.json();
+    }
+
+    // ============= UI FUNCTIONS =============
+
+    function showSignedIn(user) {
+      document.getElementById('not-signed-in').style.display = 'none';
+      document.getElementById('signed-in').style.display = 'block';
+      document.getElementById('user-name').textContent = user.display_name || user.email;
+      document.getElementById('user-email').textContent = user.email || '';
+    }
+
+    function showSignedOut() {
+      document.getElementById('not-signed-in').style.display = 'block';
+      document.getElementById('signed-in').style.display = 'none';
+    }
+
+    function requireAuth() {
+      const backendToken = getBackendToken();
+      if (backendToken) {
+        document.getElementById('controls').style.display = 'block';
+        // Decode JWT to get user info (without verifying - for UI only)
+        try {
+          const payload = JSON.parse(atob(backendToken.split('.')[1]));
+          showSignedIn({ email: payload.email, display_name: payload.email });
+        } catch (e) {
+          // Fallback
+          showSignedIn({ email: 'User', display_name: 'User' });
+        }
+      } else {
+        document.getElementById('controls').style.display = 'none';
+        showSignedOut();
+      }
+    }
+
+    // Toggle between signup and login forms
+    document.getElementById('btn-signup-modal').addEventListener('click', () => {
+      document.getElementById('signup-form').classList.add('show');
+      document.getElementById('login-form').classList.remove('show');
+      document.getElementById('signup-email').focus();
+    });
+
+    document.getElementById('btn-login-modal').addEventListener('click', () => {
+      document.getElementById('login-form').classList.add('show');
+      document.getElementById('signup-form').classList.remove('show');
+      document.getElementById('login-email').focus();
+    });
+
+    document.getElementById('toggle-to-login').addEventListener('click', () => {
+      document.getElementById('signup-form').classList.remove('show');
+      document.getElementById('login-form').classList.add('show');
+    });
+
+    document.getElementById('toggle-to-signup').addEventListener('click', () => {
+      document.getElementById('login-form').classList.remove('show');
+      document.getElementById('signup-form').classList.add('show');
+    });
+
+    // Cancel buttons
+    document.getElementById('btn-signup-cancel').addEventListener('click', () => {
+      document.getElementById('signup-form').classList.remove('show');
+      clearAuthForm('signup');
+    });
+
+    document.getElementById('btn-login-cancel').addEventListener('click', () => {
+      document.getElementById('login-form').classList.remove('show');
+      clearAuthForm('login');
+    });
+
+    // Sign up submission
+    document.getElementById('btn-signup-submit').addEventListener('click', async () => {
+      const email = document.getElementById('signup-email').value.trim();
+      const password = document.getElementById('signup-password').value;
+      const confirmPassword = document.getElementById('signup-confirm-password').value;
+      const displayName = document.getElementById('signup-name').value.trim();
+      const messageEl = document.getElementById('signup-message');
+
+      // Validation
+      if (!email || !password || !confirmPassword || !displayName) {
+        showMessage('All fields are required.', 'error', messageEl);
+        return;
+      }
+
+      if (password !== confirmPassword) {
+        showMessage('Passwords do not match.', 'error', messageEl);
+        return;
+      }
+
+      if (password.length < 6) {
+        showMessage('Password must be at least 6 characters.', 'error', messageEl);
+        return;
+      }
+
+      if (!isValidEmail(email)) {
+        showMessage('Please enter a valid email address.', 'error', messageEl);
+        return;
+      }
+
+      // Call backend
+      const result = await signupWithBackend(email, password, displayName);
+      if (result.success) {
+        showMessage('✓ Account created! Redirecting...', 'success', messageEl);
+        setTimeout(() => {
+          clearAuthForm('signup');
+          document.getElementById('signup-form').classList.remove('show');
+          requireAuth();
+        }, 1500);
+      } else {
+        showMessage(result.error, 'error', messageEl);
+      }
+    });
+
+    // Login submission
+    document.getElementById('btn-login-submit').addEventListener('click', async () => {
+      const email = document.getElementById('login-email').value.trim();
+      const password = document.getElementById('login-password').value;
+      const messageEl = document.getElementById('login-message');
+
+      if (!email || !password) {
+        showMessage('Email and password are required.', 'error', messageEl);
+        return;
+      }
+
+      // Call backend
+      const result = await loginWithBackend(email, password);
+      if (result.success) {
+        showMessage('✓ Logged in! Redirecting...', 'success', messageEl);
+        setTimeout(() => {
+          clearAuthForm('login');
+          document.getElementById('login-form').classList.remove('show');
+          requireAuth();
+        }, 1000);
+      } else {
+        showMessage(result.error, 'error', messageEl);
+      }
+    });
+
+    function clearAuthForm(type) {
+      if (type === 'signup') {
+        document.getElementById('signup-email').value = '';
+        document.getElementById('signup-password').value = '';
+        document.getElementById('signup-confirm-password').value = '';
+        document.getElementById('signup-name').value = '';
+        document.getElementById('signup-message').textContent = '';
+        document.getElementById('signup-message').className = 'auth-message';
+      } else {
+        document.getElementById('login-email').value = '';
+        document.getElementById('login-password').value = '';
+        document.getElementById('login-message').textContent = '';
+        document.getElementById('login-message').className = 'auth-message';
+      }
+    }
+
+    function showMessage(msg, type, element) {
+      element.textContent = msg;
+      element.className = `auth-message ${type}`;
+    }
+
+    function isValidEmail(email) {
+      const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      return re.test(email);
+    }
+
+    // Spotify OAuth login
+    document.getElementById('btn-login-spotify').addEventListener('click', () => {
+      const authEndpoint = 'https://accounts.spotify.com/authorize';
+      const params = new URLSearchParams({
+        client_id: CLIENT_ID,
+        response_type: 'token',
+        redirect_uri: REDIRECT_URI,
+        scope: SCOPES,
+        show_dialog: 'true'
+      });
+      window.location = authEndpoint + '?' + params.toString();
+    });
+
+    // Logout
+    document.getElementById('btn-logout').addEventListener('click', () => {
+      logoutBackend();
+      clearSpotifyToken();
+      showSignedOut();
+      requireAuth();
+    });
+
+    // On load
+    saveSpotifyTokenFromHash();
+    requireAuth();
+
+    // ============= SPOTIFY SEARCH & PLAYBACK =============
+
+    document.getElementById('btn-search').addEventListener('click', async () => {
+      const q = document.getElementById('query').value.trim();
+      if (!q) return alert('Enter a search query');
+      const spotifyToken = getSpotifyToken();
+      if (!spotifyToken) return alert('Not authenticated with Spotify. Click "Sign in with Spotify" first.');
+      const params = new URLSearchParams({ q, type: 'track', limit: '20' });
+      const res = await fetch('https://api.spotify.com/v1/search?' + params.toString(), {
+        headers: { Authorization: 'Bearer ' + spotifyToken }
+      });
+      if (res.status === 401) {
+        alert('Spotify token expired. Please sign in again.');
+        clearSpotifyToken();
+        return;
+      }
+      const data = await res.json();
+      showResults(data.tracks.items || []);
+    });
+
+    function showResults(tracks) {
+      const cont = document.getElementById('search-results');
+      cont.innerHTML = '';
+      tracks.forEach(t => {
+        const el = document.createElement('div');
+        el.className = 'track';
+        el.innerHTML = `
+          <img src="${t.album.images[2]?.url || ''}" alt="art" />
+          <div class="track-info">
+            <div><strong>${escapeHtml(t.name)}</strong></div>
+            <div style="font-size:0.85em;color:#666;">${escapeHtml(t.artists.map(a => a.name).join(', '))}</div>
+          </div>
+          <button class="btn-play" data-uri="${t.uri}">Play</button>
+        `;
+        cont.appendChild(el);
+      });
+      cont.querySelectorAll('.btn-play').forEach(b => {
+        b.addEventListener('click', async (ev) => {
+          const uri = ev.currentTarget.getAttribute('data-uri');
+          await playURI(uri);
+        });
+      });
+    }
+
+    function escapeHtml(s) {
+      return s ? s.replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])) : '';
+    }
+
+    // Spotify Web Playback SDK
+    let player = null;
+    let deviceId = null;
+
+    (function loadSDK(){
+      const script = document.createElement('script');
+      script.src = "https://sdk.scdn.co/spotify-player.js";
+      script.async = true;
+      document.body.appendChild(script);
+    })();
+
+    window.onSpotifyWebPlaybackSDKReady = () => {
+      const spotifyToken = getSpotifyToken();
+      if (!spotifyToken) {
+        document.getElementById('player-status').textContent = 'Not authenticated with Spotify.';
+        return;
+      }
+      player = new Spotify.Player({
+        name: 'Spotify Secure Search',
+        getOAuthToken: cb => { cb(spotifyToken); },
+        volume: 0.8
+      });
+
+      player.addListener('initialization_error', ({ message }) => { console.error(message); });
+      player.addListener('authentication_error', ({ message }) => {
+        console.error('Auth error', message);
+        document.getElementById('player-status').textContent = 'Authentication error — sign in with Spotify again.';
+      });
+      player.addListener('account_error', ({ message }) => { console.error(message); });
+      player.addListener('playback_error', ({ message }) => { console.error(message); });
+
+      player.addListener('player_state_changed', state => {
+        if (!state) return;
+        const track = state.track_window.current_track;
+        document.getElementById('player-status').textContent = `Playing: ${track.name} — ${track.artists.map(a=>a.name).join(', ')}`;
+      });
+
+      player.addListener('ready', ({ device_id }) => {
+        deviceId = device_id;
+        document.getElementById('player-status').textContent = 'Player ready ✓';
+        console.log('Ready with Device ID', device_id);
+      });
+
+      player.addListener('not_ready', ({ device_id }) => {
+        console.log('Device ID has gone offline', device_id);
+      });
+
+      player.connect();
+    };
+
+    async function playURI(uri) {
+      const spotifyToken = getSpotifyToken();
+      if (!spotifyToken) return alert('Not authenticated with Spotify.');
+      
+      if (deviceId) {
+        await fetch('https://api.spotify.com/v1/me/player', {
+          method: 'PUT',
+          headers: { Authorization: 'Bearer ' + spotifyToken, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ device_ids: [deviceId], play: false })
+        });
+        const resp = await fetch(`https://api.spotify.com/v1/me/player/play?device_id=${deviceId}`, {
+          method: 'PUT',
+          headers: { Authorization: 'Bearer ' + spotifyToken, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ uris: [uri] })
+        });
+        if (resp.status !== 204) {
+          alert('Could not start playback. Ensure you have a Premium account.');
+        }
+      } else {
+        const resp = await fetch('https://api.spotify.com/v1/me/player/play', {
+          method: 'PUT',
+          headers: { Authorization: 'Bearer ' + spotifyToken, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ uris: [uri] })
+        });
+        if (resp.status !== 204) {
+          alert('Could not start playback. Ensure you have an active Spotify device.');
+        }
+      }
+    }
+  </script>
+</body>
+</html>
