@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Spotify Search & Play</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 16px; }
+    #login, #controls, #search-results { margin-top: 16px; }
+    .track { padding: 8px; border-bottom: 1px solid #eee; display:flex; gap:8px; align-items:center; }
+    .track img { width:64px; height:64px; object-fit:cover; }
+    .track-info { flex:1; }
+    button { cursor:pointer; }
+    #player-status { font-size: 0.9em; color: #555; margin-top:8px; }
+    #user-info { display:flex; align-items:center; gap:8px; }
+    #user-info img { width:48px; height:48px; border-radius:50%; }
+  </style>
+</head>
+<body>
+  <h1>Spotify Search & Play</h1>
+
+  <div id="login">
+    <div id="not-signed-in">
+      <button id="btn-login">Sign in with Spotify</button>
+      <button id="btn-signup">Sign up for Spotify</button>
+    </div>
+    <div id="signed-in" style="display:none;">
+      <div id="user-info">
+        <img id="user-avatar" src="" alt="avatar" />
+        <div>
+          <div id="user-name"></div>
+          <div style="font-size:0.9em;color:#666;" id="user-email"></div>
+        </div>
+      </div>
+      <div style="margin-top:8px;">
+        <button id="btn-logout">Sign out</button>
+      </div>
+    </div>
+    <div id="token-info"></div>
+  </div>
+
+  <div id="controls" style="display:none;">
+    <input id="query" placeholder="Search for track or artist" style="width:60%;" />
+    <button id="btn-search">Search</button>
+    <div id="player-status">Player not ready</div>
+  </div>
+
+  <div id="search-results"></div>
+
+  <!-- Spotify Web Playback SDK will be loaded dynamically -->
+  <script>
+    // CONFIGURE THESE:
+    const CLIENT_ID = 'REPLACE_WITH_YOUR_SPOTIFY_CLIENT_ID';
+    const REDIRECT_URI = 'https://yourdomain.example/'; // Must match Redirect URI in Spotify Dev Dashboard
+    // SCOPES:
+    const SCOPES = [
+      'streaming',
+      'user-read-email',
+      'user-read-private',
+      'user-read-playback-state',
+      'user-modify-playback-state'
+    ].join(' ');
+
+    // Helper: parse token from URL hash (implicit grant)
+    function parseHash() {
+      const hash = window.location.hash.substring(1);
+      const result = {};
+      hash.split('&').forEach(part => {
+        const [k, v] = part.split('=');
+        if (k) result[k] = decodeURIComponent(v);
+      });
+      return result;
+    }
+
+    function saveTokenFromHash() {
+      const data = parseHash();
+      if (data.access_token) {
+        const expiresAt = Date.now() + (parseInt(data.expires_in || '3600', 10) * 1000);
+        localStorage.setItem('spotify_token', data.access_token);
+        localStorage.setItem('spotify_token_expires', expiresAt);
+        // remove token from url
+        history.replaceState(null, '', location.pathname + location.search);
+      }
+    }
+
+    function getToken() {
+      const token = localStorage.getItem('spotify_token');
+      const expires = parseInt(localStorage.getItem('spotify_token_expires') || '0', 10);
+      if (token && Date.now() < expires) return token;
+      return null;
+    }
+
+    function clearToken() {
+      localStorage.removeItem('spotify_token');
+      localStorage.removeItem('spotify_token_expires');
+    }
+
+    async function fetchMe(token) {
+      const res = await fetch('https://api.spotify.com/v1/me', { headers: { Authorization: 'Bearer ' + token } });
+      if (!res.ok) throw new Error('Failed to fetch user profile: ' + res.status);
+      return await res.json();
+    }
+
+    function showSignedIn(user) {
+      document.getElementById('not-signed-in').style.display = 'none';
+      document.getElementById('signed-in').style.display = 'block';
+      document.getElementById('user-name').textContent = user.display_name || user.id;
+      document.getElementById('user-email').textContent = user.email || '';
+      const img = user.images && user.images[0] ? user.images[0].url : '';
+      document.getElementById('user-avatar').src = img;
+    }
+
+    function showSignedOut() {
+      document.getElementById('not-signed-in').style.display = 'block';
+      document.getElementById('signed-in').style.display = 'none';
+    }
+
+    function requireAuth() {
+      const token = getToken();
+      if (!token) {
+        document.getElementById('controls').style.display = 'none';
+        document.getElementById('login').style.display = 'block';
+        showSignedOut();
+      } else {
+        document.getElementById('controls').style.display = 'block';
+        document.getElementById('login').style.display = 'block';
+        document.getElementById('token-info').textContent = 'Authenticated (token stored)';
+        // fetch profile
+        fetchMe(token).then(user => showSignedIn(user)).catch(err => {
+          console.warn(err);
+          // token may be invalid
+          clearToken();
+          showSignedOut();
+          requireAuth();
+        });
+      }
+    }
+
+    document.getElementById('btn-login').addEventListener('click', () => {
+      const authEndpoint = 'https://accounts.spotify.com/authorize';
+      const params = new URLSearchParams({
+        client_id: CLIENT_ID,
+        response_type: 'token', // implicit grant
+        redirect_uri: REDIRECT_URI,
+        scope: SCOPES,
+        show_dialog: 'true'
+      });
+      window.location = authEndpoint + '?' + params.toString();
+    });
+
+    document.getElementById('btn-signup').addEventListener('click', () => {
+      // Open Spotify sign-up page in a new tab/window
+      window.open('https://www.spotify.com/signup/', '_blank');
+    });
+
+    document.getElementById('btn-logout').addEventListener('click', () => {
+      clearToken();
+      showSignedOut();
+      requireAuth();
+    });
+
+    // On load, attempt to save token from URL if present
+    saveTokenFromHash();
+    requireAuth();
+
+    // Search
+    document.getElementById('btn-search').addEventListener('click', async () => {
+      const q = document.getElementById('query').value.trim();
+      if (!q) return alert('Enter a search query');
+      const token = getToken();
+      if (!token) return alert('Not authenticated. Click Sign in first.');
+      const params = new URLSearchParams({ q, type: 'track', limit: '20' });
+      const res = await fetch('https://api.spotify.com/v1/search?' + params.toString(), {
+        headers: { Authorization: 'Bearer ' + token }
+      });
+      if (res.status === 401) {
+        alert('Token expired or invalid. Please sign in again.');
+        clearToken();
+        requireAuth();
+        return;
+      }
+      const data = await res.json();
+      showResults(data.tracks.items || []);
+    });
+
+    function showResults(tracks) {
+      const cont = document.getElementById('search-results');
+      cont.innerHTML = '';
+      tracks.forEach(t => {
+        const el = document.createElement('div');
+        el.className = 'track';
+        el.innerHTML = `\n          <img src="${t.album.images[2]?.url || ''}" alt="art" />\n          <div class="track-info">\n            <div><strong>${escapeHtml(t.name)}</strong></div>\n            <div>${escapeHtml(t.artists.map(a => a.name).join(', '))} — ${escapeHtml(t.album.name)}</div>\n          </div>\n          <div>\n            <button data-uri="${t.uri}" class="btn-play">Play</button>\n          </div>\n        `;
+        cont.appendChild(el);
+      });
+      // attach handlers
+      cont.querySelectorAll('.btn-play').forEach(b => {
+        b.addEventListener('click', async (ev) => {
+          const uri = ev.currentTarget.getAttribute('data-uri');
+          await playURI(uri);
+        });
+      });
+    }
+
+    // Basic HTML escaping
+    function escapeHtml(s) {
+      return s ? s.replace(/[&<>\"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[c])) : '';
+    }
+
+    // Spotify Web Playback SDK integration
+    let player = null;
+    let deviceId = null;
+
+    // Load SDK script
+    (function loadSDK(){
+      const script = document.createElement('script');
+      script.src = "https://sdk.scdn.co/spotify-player.js";
+      script.async = true;
+      document.body.appendChild(script);
+    })();
+
+    window.onSpotifyWebPlaybackSDKReady = () => {
+      const token = getToken();
+      if (!token) {
+        document.getElementById('player-status').textContent = 'Not authenticated for playback.';
+        return;
+      }
+      player = new Spotify.Player({
+        name: 'Web Playback SDK — Example Player',
+        getOAuthToken: cb => { cb(token); },
+        volume: 0.8
+      });
+
+      // error handling
+      player.addListener('initialization_error', ({ message }) => { console.error(message); });
+      player.addListener('authentication_error', ({ message }) => {
+        console.error('Auth error', message);
+        document.getElementById('player-status').textContent = 'Authentication error — sign in again.';
+      });
+      player.addListener('account_error', ({ message }) => { console.error(message); });
+      player.addListener('playback_error', ({ message }) => { console.error(message); });
+
+      // playback status
+      player.addListener('player_state_changed', state => {
+        if (!state) return;
+        const track = state.track_window.current_track;
+        document.getElementById('player-status').textContent = `Playing on this page: ${track.name} — ${track.artists.map(a=>a.name).join(', ')}`;
+      });
+
+      // Ready
+      player.addListener('ready', ({ device_id }) => {
+        deviceId = device_id;
+        document.getElementById('player-status').textContent = 'Player ready. Device ID: ' + device_id;
+        console.log('Ready with Device ID', device_id);
+      });
+
+      player.addListener('not_ready', ({ device_id }) => {
+        console.log('Device ID has gone offline', device_id);
+      });
+
+      player.connect();
+      requireAuth();
+    };
+
+    // Play a URI on the active device (this page if SDK connected)
+    async function playURI(uri) {
+      const token = getToken();
+      if (!token) return alert('Not authenticated.');
+      // If we have a deviceId from Web Playback SDK, transfer and play there
+      if (deviceId) {
+        // Optionally transfer playback to this device
+        await fetch('https://api.spotify.com/v1/me/player', {
+          method: 'PUT',
+          headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ device_ids: [deviceId], play: false })
+        });
+        // Start playback
+        const resp = await fetch(`https://api.spotify.com/v1/me/player/play?device_id=${deviceId}`, {
+          method: 'PUT',
+          headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ uris: [uri] })
+        });
+        if (resp.status === 204) {
+          // success
+        } else {
+          console.warn('Play request status', resp.status);
+          const txt = await resp.text();
+          console.warn(txt);
+          alert('Could not start playback. Make sure you have a Premium account and playback device is active.');
+        }
+      } else {
+        // If no device ID, attempt play on user's active device (external)
+        const resp = await fetch('https://api.spotify.com/v1/me/player/play', {
+          method: 'PUT',
+          headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ uris: [uri] })
+        });
+        if (resp.status !== 204) {
+          const txt = await resp.text();
+          console.warn('Play error', resp.status, txt);
+          alert('Could not start playback. Ensure you have an active Spotify device (or use this page with a Premium account).');
+        }
+      }
+    }
+  </script>
+</body>
+</html>
